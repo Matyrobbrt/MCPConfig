@@ -14,7 +14,7 @@
           methodhandle = lookup.findStatic(GLFW.class, "glfwRawMouseMotionSupported", methodtype);
           MethodHandle methodhandle1 = lookup.findStaticGetter(GLFW.class, "GLFW_RAW_MOUSE_MOTION", Integer.TYPE);
 -         i = methodhandle1.invokeExact();
-+         i = (int)methodhandle1.invokeExact();
++         i = (int) methodhandle1.invokeExact();
        } catch (NoSuchFieldException | NoSuchMethodException nosuchmethodexception) {
        } catch (Throwable throwable) {
           throw new RuntimeException(throwable);

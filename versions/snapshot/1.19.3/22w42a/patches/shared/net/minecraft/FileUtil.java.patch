@@ -1,0 +1,12 @@
+--- a/net/minecraft/FileUtil.java
++++ b/net/minecraft/FileUtil.java
+@@ -121,7 +121,8 @@
+          boolean flag = false;
+ 
+          while(true) {
+-            switch (p_248866_.substring(j, i)) {
++            String s = p_248866_.substring(j, i);
++            switch (s) {
+                case "":
+                case ".":
+                case "..":

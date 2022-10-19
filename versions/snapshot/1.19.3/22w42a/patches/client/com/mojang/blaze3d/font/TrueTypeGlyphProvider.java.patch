@@ -5,7 +5,7 @@
                    }
  
 -                  glyphinfo = () -> {
-+                  glyphinfo = (GlyphInfo.SpaceGlyphInfo)() -> {
++                  glyphinfo = (GlyphInfo.SpaceGlyphInfo) () -> {
                       return f / this.f_83839_;
                    };
                 } catch (Throwable throwable1) {
