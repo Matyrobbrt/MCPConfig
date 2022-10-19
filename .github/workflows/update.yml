@@ -1,0 +1,324 @@
+# This is a basic workflow that is manually triggered
+
+name: Update
+run-name: Update to ${{ inputs.new_version }} from ${{ inputs.old_version }}
+
+# Controls when the action will run. Workflow runs when manually triggered using the UI
+# or API.
+on:
+  workflow_dispatch:
+    # Inputs the workflow accepts.
+    inputs:
+      old_branch:
+        description: 'Old branch'
+        required: true
+        default: 'upstream/master'
+      old_version:
+        # Friendly description to be shown in the UI instead of 'name'
+        description: 'Old version'
+        # Input has to be provided for the workflow to run
+        required: true
+      patch_src:
+        description: 'Patches version'
+        required: false
+      new_branch:
+        description: 'New branch'
+        required: false
+      new_version:
+        # Friendly description to be shown in the UI instead of 'name'
+        description: 'New version'
+        # Input has to be provided for the workflow to run
+        required: true
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+env:
+  JAVA_VERSION: 17
+
+jobs:
+  update:
+
+    name: Update
+    runs-on: ubuntu-latest
+    outputs:
+      old_version_type: ${{ fromJson(steps.split_version.outputs.result).old_version_type }}
+      old_version_name: ${{ fromJson(steps.split_version.outputs.result).old_version_name }}
+      new_version_type: ${{ fromJson(steps.split_version.outputs.result).new_version_type }}
+      new_version_name: ${{ fromJson(steps.split_version.outputs.result).new_version_name }}
+      old_branch_name: ${{ fromJson(steps.split_version.outputs.result).old_branch }}
+    steps:
+    - name: "Log arguments"
+      run: |
+        echo "Old branch: ${{ github.event.inputs.old_branch }}"
+        echo "Old version: ${{ github.event.inputs.old_version }}"
+        echo "Patches version: ${{ github.event.inputs.patch_src }}"
+        echo "New branch: ${{ github.event.inputs.new_branch }}"
+        echo "New version: ${{ github.event.inputs.new_version }}"
+    - uses: actions/github-script@v6
+      name: Check arguments
+      env:
+        OLD_BRANCH: ${{ github.event.inputs.old_branch }}
+        OLD_VERSION: ${{ github.event.inputs.old_version }}
+        PATCHES_VERSION: ${{ github.event.inputs.patch_src }}
+        NEW_BRANCH: ${{ github.event.inputs.new_branch }}
+        NEW_VERSION: ${{ github.event.inputs.new_version }}
+      with:
+        script: |
+          const oldBranch = process.env.OLD_BRANCH;
+          const oldVersion = process.env.OLD_VERSION;
+          const patchesVersion = process.env.PATCHES_VERSION;
+          const newBranch = process.env.NEW_BRANCH;
+          const newVersion = process.env.NEW_VERSION;
+          
+          const versionRegex = /^(release|(snapshot|pre)\/[^/]+)\/[^/]+$/;
+          var failed = 0
+          if (!/^(upstream|origin)\/.+/.test(oldBranch)) {
+            core.error("Old branch needs to be set to an existing branch on either `MinecraftForge/MCPConfig` or `coehlrich/MCPConfig` in the format of `<repo>/<branch>` where repo is either `upstream` or `origin`")
+            failed++;
+          }
+          
+          if (!versionRegex.test(oldVersion)) {
+            core.error("Old version needs to be set to a version that is on the old branch and needs to be in the format of either `release/<version>`, `pre/<target>/<version>`, or `snapshot/<target>/<version>`")
+            failed++;
+          }
+          
+          if (patchesVersion == oldVersion) {
+            core.error("Patches version inputted as the same as the old version only the oldVersion is needed")
+            failed++;
+          }
+          
+          if (patchesVersion != "" && !versionRegex.test(patchesVersion)) {
+            core.error("Patches version either needs to be kept empty or needs to be set to a version that is on the old branch and needs to be in the format of either `release/<version>`, `pre/<target>/<version>`, or `snapshot/<target>/<version>`")
+            failed++;
+          }
+          
+          if (oldBranch.startsWith("upstream/") && newBranch == "") {
+            core.error("if the old branch is set to an upstream branch then the new branch needs to be set since this workflow cannot push to upstream")
+            failed++;
+          }
+          
+          if (!versionRegex.test(newVersion)) {
+            core.error("New version needs to be a version that doesn't exist on the new branch and needs to be in the format of either `release/<version>`, `pre/<target>/<version>`, or `snapshot/<target>/<version>`")
+            failed++;
+          }
+          
+          if (failed > 0) {
+            core.setFailed(failed + " errors detected in arguments. Check logs for more details")
+          }
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    - name: Get Time
+      id: time
+      run: echo "::set-output name=time::$(date -Isecond -u)"
+    - uses: actions/github-script@v6
+      id: split_version
+      env:
+        OLD_VERSION: ${{ github.event.inputs.old_version }}
+        NEW_VERSION: ${{ github.event.inputs.new_version }}
+        PATCH_SRC_VERSION: ${{ github.event.inputs.patch_src }}
+        OLD_BRANCH: ${{ github.event.inputs.old_branch }}
+      with:
+        script: |
+          const oldVersion = process.env.OLD_VERSION.split("/");
+          const newVersion = process.env.NEW_VERSION.split("/");
+          var returnValue = {old_version_type: oldVersion[0], old_version_name: oldVersion[oldVersion.length - 1], new_version_type: newVersion[0], new_version_name: newVersion[newVersion.length - 1], old_branch: process.env.OLD_BRANCH.replace(/^[^/]+\//, '')}
+          if (process.env.PATCH_SRC_VERSION) {
+            var pathSrcVersion = process.env.PATCH_SRC_VERSION.split("/");
+            returnValue.patch_src_version_name = pathSrcVersion[pathSrcVersion.length - 1]
+          }
+          return returnValue;
+    - uses: actions/cache@v3
+      name: Cache BuildSrc
+      with:
+        path: |
+          buildSrc/build/**
+          buildSrc/.gradle/**
+        key: buildsrc-build-jdk${{ env.JAVA_VERSION }}-v3-${{ steps.time.outputs.time }}
+        restore-keys: |
+          buildsrc-build-jdk${{ env.JAVA_VERSION }}-v3-
+    - uses: actions/cache@v3
+      name: Cache Other
+      with:
+        path: |
+          build/download-task/**
+          .gradle/**
+        key: gradle-other-${{ steps.time.outputs.time }}
+        restore-keys: |
+          gradle-other-  
+    - run: |
+        git remote add upstream https://github.com/MinecraftForge/MCPConfig
+        git fetch upstream
+        git checkout -B ${{ fromJson(steps.split_version.outputs.result).old_branch }} remotes/${{ github.event.inputs.old_branch }}
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v3
+      with:
+        java-version: '${{ env.JAVA_VERSION }}'
+        distribution: 'temurin'
+    - id: get_versions
+      run: |
+        mkdir -p ~/.minecraft/versions/
+        wget https://piston-meta.mojang.com/mc/game/version_manifest_v2.json -O ~/.minecraft/version_manifest_v2.json
+    - uses: actions/github-script@v6
+      env:
+        OLD_VERSION: ${{ fromJson(steps.split_version.outputs.result).old_version_name }}
+        NEW_VERSION: ${{ fromJson(steps.split_version.outputs.result).new_version_name }}
+        PATCH_SRC_VERSION: ${{ fromJson(steps.split_version.outputs.result).patch_src_version_name }}
+      with:
+        script: |
+          const os = require('os')
+          const fs = require('fs')
+          const versions = JSON.parse(fs.readFileSync(os.homedir() + '/.minecraft/version_manifest_v2.json', 'utf8')).versions
+          for (var i = 0; i < versions.length; i++) {
+            var version = versions[i]
+            if (version.id == process.env.OLD_VERSION || version.id == process.env.NEW_VERSION || version.id == process.env.PATCH_SRC_VERSION) {
+                var file = os.homedir() + '/.minecraft/versions/' + version.id + '/' + version.id
+                io.mkdirP(os.homedir() + '/.minecraft/versions/' + version.id + '/')
+                await exec.exec('wget ' + version.url + ' -O '  + file + '.json')
+                var versionJson = JSON.parse(fs.readFileSync(file + '.json', 'utf8'))
+                await exec.exec('wget ' + versionJson.downloads.client.url + ' -O ' + file + '.jar')
+            }
+          }
+    - if: ${{ github.event.inputs.patch_src && github.event.inputs.patch_src != github.event.inputs.new_version }}
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: update -Pold_version=${{ github.event.inputs.patch_src }} -Pnew_version=${{ github.event.inputs.new_version }}
+        generate-job-summary: false
+    - if: ${{ github.event.inputs.patch_src }}
+      run: cp versions/${{ github.event.inputs.new_version }}/joined.tsrg ../old_joined.tsrg
+    - name: Build with Gradle
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: update -Pold_version=${{ github.event.inputs.old_version }} -Pnew_version=${{ github.event.inputs.new_version }}
+        generate-job-summary: false
+    - name: Write summary for update
+      run: |
+        cat versions/${{ github.event.inputs.new_version }}/statistics.md >> $GITHUB_STEP_SUMMARY
+        rm -f versions/${{ github.event.inputs.new_version }}/statistics.md
+    - if: ${{ github.event.inputs.patch_src }}
+      run: cp versions/${{ github.event.inputs.new_version }}/joined.tsrg ../new_joined.tsrg
+    - if: ${{ github.event.inputs.patch_src != github.event.inputs.new_version }}
+      run: |
+        rm -rf versions/${{ github.event.inputs.new_version}}/patches
+        cp -r versions/${{ github.event.inputs.patch_src || github.event.inputs.old_version }}/patches versions/${{ github.event.inputs.new_version}}/patches
+    - if: ${{ github.event.inputs.patch_src }}
+      run: |
+        cd ..
+        wget https://github.com/coehlrich/remap-patches/releases/download/1.0.6/remap-patches-all.jar
+        java -jar remap-patches-all.jar old_joined.tsrg new_joined.tsrg MCPConfig/versions/${{ github.event.inputs.new_version }}/patches
+        cd MCPConfig
+    - run: git add .
+    - if: ${{ github.event.inputs.new_branch }}
+      run: |
+        git stash
+        git checkout ${{ github.event.inputs.new_branch }} || git checkout -B ${{ github.event.inputs.new_branch }} remotes/upstream/master
+        git push -u origin ${{ github.event.inputs.new_branch }}
+        rm -rf versions/${{ github.event.inputs.new_version }}
+        git add .
+        git stash apply
+    - run: |
+        git config --global user.name github-actions
+        git config --global user.email 41898282+github-actions[bot]@users.noreply.github.com
+        git commit -m "Start ${{ github.event.inputs.new_version }}"
+        git push
+
+  get-diff:
+    name: Get diff
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: update
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    - name: Get Time
+      id: time
+      run: echo "::set-output name=time::$(date -Isecond -u)"
+    - name: Set up JDK ${{ env.JAVA_VERSION }}
+      uses: actions/setup-java@v3
+      with:
+        java-version: ${{ env.JAVA_VERSION }}
+        distribution: 'temurin'
+    - uses: actions/cache@v3
+      name: Cache ${{ needs.update.outputs.new_version_name }}
+      with:
+        path: |
+          build/versions/${{ needs.update.outputs.new_version_name }}/**
+          versions/${{ inputs.new_version }}/build/download-task/**
+        key: version-v3-${{ needs.update.outputs.new_version_name }}
+    - uses: actions/cache@v3
+      name: Cache ${{ needs.update.outputs.old_version_name }}
+      with:
+        path: |
+          build/versions/${{ needs.update.outputs.old_version_name }}/**
+          versions/${{ inputs.old_version }}/build/download-task/**
+        key: version-v3-${{ needs.update.outputs.old_version_name }}
+    - uses: actions/cache@v3
+      name: Cache Assets
+      with:
+        path: build/assets/**
+        key: minecraft-assets-v3-${{ steps.time.outputs.time }}
+        restore-keys: |
+          minecraft-assets-v3-
+    - uses: actions/cache@v3
+      name: Cache Libraries
+      with:
+        path: build/libraries/**
+        key: minecraft-libraries-v3-${{ steps.time.outputs.time }}
+        restore-keys: |
+          minecraft-libraries-v3-
+    - uses: actions/cache@v3
+      name: Cache Version Manifest
+      with:
+        path: build/versions/version_manifest.json
+        key: minecraft-version-manifest-v3-${{ steps.time.outputs.time }}
+        restore-keys: |
+          minecraft-version-manifest-v3-
+    - uses: actions/cache@v3
+      name: Cache BuildSrc
+      with:
+        path: |
+          buildSrc/build/**
+          buildSrc/.gradle/**
+        key: buildsrc-build-jdk17-v3-${{ steps.time.outputs.time }}
+        restore-keys: |
+          buildsrc-build-jdk17-v3-
+    - uses: actions/cache@v3
+      name: Cache Other
+      with:
+        path: |
+          build/download-task/**
+          .gradle/**
+        key: gradle-other-${{ steps.time.outputs.time }}
+        restore-keys: |
+          gradle-other-  
+    - run: |
+        git remote add upstream https://github.com/MinecraftForge/MCPConfig
+        git fetch upstream
+        git checkout -B ${{ needs.update.outputs.old_branch_name }} remotes/${{ inputs.old_branch }}
+    - name: Get old joined src
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: :${{ needs.update.outputs.old_version_name }}:projectResetAll -Pupdating -Ptype=${{ needs.update.outputs.old_version_type }}
+        generate-job-summary: false
+    - name: Checkout new branch
+      if: ${{ inputs.new_branch }}
+      run: git checkout ${{ inputs.new_branch }}
+    - name: Get new joined src
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: :${{ needs.update.outputs.new_version_name }}:projectResetAll -Pupdating -Ptype=${{ needs.update.outputs.new_version_type }}
+        generate-job-summary: false
+    - name: Get diff
+      run: git diff --no-index versions/${{ inputs.old_version }}/projects/joined/src/main/java versions/${{ inputs.new_version }}/projects/joined/src/main/java > ${{ needs.update.outputs.old_version_name }}-${{ needs.update.outputs.new_version_name }}.patch || true
+    - name: Upload diff as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ needs.update.outputs.old_version_name }}-${{ needs.update.outputs.new_version_name }}-patch
+        path: '*.patch'
+
+  finish:
+    needs: update
+    uses: ./.github/workflows/common.yml
+    with:
+      branch: ${{ github.event.inputs.new_branch || needs.update.outputs.old_branch_name }}
+      version: ${{ github.event.inputs.new_version }}
